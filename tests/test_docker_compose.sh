@@ -123,13 +123,12 @@ test_replication_setup() {
     
     if [ "$sub_exists" = "0" ]; then
         log_info "Subscription does not exist. Creating subscription..."
-        PGPASSWORD="$DB_PASSWORD" psql -h "$TARGET_HOST" -p "$TARGET_PORT" -U "$DB_USER" -d "$TARGET_DB" -c "
-            DROP SUBSCRIPTION IF EXISTS my_subscription;
-            CREATE SUBSCRIPTION my_subscription 
-            CONNECTION 'host=$SOURCE_HOST port=$SOURCE_PORT dbname=$SOURCE_DB user=$DB_USER password=$DB_PASSWORD' 
-            PUBLICATION my_publication 
-            WITH (copy_data = true, create_slot = true);
-        " 2>/dev/null
+        # First drop the subscription if it exists
+        PGPASSWORD="$DB_PASSWORD" psql -h "$TARGET_HOST" -p "$TARGET_PORT" -U "$DB_USER" -d "$TARGET_DB" -c "DROP SUBSCRIPTION IF EXISTS my_subscription;" 2>/dev/null
+        
+        # Then create the subscription in a separate command (outside transaction)
+        PGPASSWORD="$DB_PASSWORD" psql -h "$TARGET_HOST" -p "$TARGET_PORT" -U "$DB_USER" -d "$TARGET_DB" -c "CREATE SUBSCRIPTION my_subscription CONNECTION 'host=$SOURCE_HOST port=$SOURCE_PORT dbname=$SOURCE_DB user=$DB_USER password=$DB_PASSWORD' PUBLICATION my_publication WITH (copy_data = true, create_slot = true);" 2>/dev/null
+        
         sleep 5  # Give it time to create the slot
     fi
     

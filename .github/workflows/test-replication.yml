@@ -133,13 +133,11 @@ jobs:
         PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -c "CREATE PUBLICATION my_publication FOR ALL TABLES;"
         
         # Set up subscription on target with correct connection parameters
-        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -c "
-          DROP SUBSCRIPTION IF EXISTS my_subscription;
-          CREATE SUBSCRIPTION my_subscription
-          CONNECTION 'host=localhost port=5432 dbname=sourcedb user=postgres password=postgres'
-          PUBLICATION my_publication
-          WITH (copy_data = true, create_slot = true);
-        "
+        # First drop the subscription if it exists
+        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -c "DROP SUBSCRIPTION IF EXISTS my_subscription;"
+        
+        # Then create the subscription in a separate command (outside transaction)
+        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -c "CREATE SUBSCRIPTION my_subscription CONNECTION 'host=localhost port=5432 dbname=sourcedb user=postgres password=postgres' PUBLICATION my_publication WITH (copy_data = true, create_slot = true);"
         
         # Wait for replication to be established
         sleep 10
@@ -192,6 +190,7 @@ jobs:
     - name: Deploy PostgreSQL replication setup
       run: |
         # Generate and apply manifests
+        kubectl create ns database-replication
         kustomize build --enable-alpha-plugins k8s | kubectl apply -f -
         
         # Wait for StatefulSets to be ready
