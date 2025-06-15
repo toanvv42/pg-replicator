@@ -174,24 +174,86 @@ spec:
               local test_name="K8s Test User ${test_timestamp}"
               local test_product="K8s Test Product ${test_timestamp}"
               
+              # Ensure test tables exist on source
+              PGPASSWORD="$DB_PASSWORD" psql -h "$SOURCE_HOST" -p "$SOURCE_PORT" -U "$DB_USER" -d "$SOURCE_DB" -c "
+                  CREATE TABLE IF NOT EXISTS users (
+                      id SERIAL PRIMARY KEY,
+                      name VARCHAR(100) NOT NULL,
+                      email VARCHAR(100) UNIQUE NOT NULL
+                  );
+                  
+                  CREATE TABLE IF NOT EXISTS orders (
+                      id SERIAL PRIMARY KEY,
+                      user_id INTEGER REFERENCES users(id),
+                      product_name VARCHAR(100) NOT NULL,
+                      amount NUMERIC(10,2) NOT NULL
+                  );
+              " 2>/dev/null
+              
+              # Ensure test tables exist on target
+              PGPASSWORD="$DB_PASSWORD" psql -h "$TARGET_HOST" -p "$TARGET_PORT" -U "$DB_USER" -d "$TARGET_DB" -c "
+                  CREATE TABLE IF NOT EXISTS users (
+                      id SERIAL PRIMARY KEY,
+                      name VARCHAR(100) NOT NULL,
+                      email VARCHAR(100) UNIQUE NOT NULL
+                  );
+                  
+                  CREATE TABLE IF NOT EXISTS orders (
+                      id SERIAL PRIMARY KEY,
+                      user_id INTEGER REFERENCES users(id),
+                      product_name VARCHAR(100) NOT NULL,
+                      amount NUMERIC(10,2) NOT NULL
+                  );
+              " 2>/dev/null
+
               # Insert test data on source
               log_info "Inserting test data on source..."
               local insert_result
+              # Capture both stdout and stderr
               insert_result=$(PGPASSWORD="$DB_PASSWORD" psql -h "$SOURCE_HOST" -p "$SOURCE_PORT" -U "$DB_USER" -d "$SOURCE_DB" -t -c "
                   INSERT INTO users (name, email) VALUES ('$test_name', '$test_email') RETURNING id;
-              " 2>/dev/null | tr -d ' ')
+              " 2>&1)
               
-              if [ -n "$insert_result" ] && [ "$insert_result" -gt 0 ]; then
+              # Log the raw result for debugging
+              log_info "Raw insert result: '$insert_result'"
+              
+              # Check if the insert was successful by looking for error messages
+              if [[ "$insert_result" == *"ERROR"* ]]; then
+                  log_info "SQL Error during insert: $insert_result"
+                  test_fail "Test user inserted on source"
+                  return 1
+              fi
+              
+              # Properly extract the ID value - use grep to find numbers
+              test_user_id=$(echo "$insert_result" | grep -o '[0-9]\+' | head -1)
+              log_info "Extracted user ID: '$test_user_id'"
+              
+              # Validate that we have a numeric ID
+              if [[ -n "$test_user_id" ]] && [[ "$test_user_id" =~ ^[0-9]+$ ]]; then
                   test_pass "Test user inserted on source"
-                  local test_user_id="$insert_result"
                   
                   # Insert test order
                   local order_result
                   order_result=$(PGPASSWORD="$DB_PASSWORD" psql -h "$SOURCE_HOST" -p "$SOURCE_PORT" -U "$DB_USER" -d "$SOURCE_DB" -t -c "
                       INSERT INTO orders (user_id, product_name, amount) VALUES ($test_user_id, '$test_product', 199.99) RETURNING id;
-                  " 2>/dev/null | tr -d ' ')
+                  " 2>&1)
                   
-                  if [ -n "$order_result" ] && [ "$order_result" -gt 0 ]; then
+                  # Log the raw result for debugging
+                  log_info "Raw order insert result: '$order_result'"
+                  
+                  # Check if the insert was successful by looking for error messages
+                  if [[ "$order_result" == *"ERROR"* ]]; then
+                      log_info "SQL Error during order insert: $order_result"
+                      test_fail "Test order inserted on source"
+                      return 1
+                  fi
+                  
+                  # Properly extract the order ID - use grep to find numbers
+                  test_order_id=$(echo "$order_result" | grep -o '[0-9]\+' | head -1)
+                  log_info "Extracted order ID: '$test_order_id'"
+                  
+                  # Validate that we have a numeric ID
+                  if [[ -n "$test_order_id" ]] && [[ "$test_order_id" =~ ^[0-9]+$ ]]; then
                       test_pass "Test order inserted on source"
                   else
                       test_fail "Test order inserted on source"
