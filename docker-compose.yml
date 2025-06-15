@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  db_source:
+    image: postgres:14
+    container_name: postgres14_source
+    environment:
+      POSTGRES_DB: sourcedb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init-source.sql:/docker-entrypoint-initdb.d/init-source.sql
+      - source_data:/var/lib/postgresql/data
+    command: >
+      postgres
+      -c wal_level=logical
+      -c max_replication_slots=4
+      -c max_wal_senders=4
+      -c max_logical_replication_workers=4
+      -c log_statement=all
+      -c log_replication_commands=on
+      -c shared_preload_libraries=''
+    networks:
+      - postgres_network
+
+  db_target:
+    image: postgres:16
+    container_name: postgres16_target
+    environment:
+      POSTGRES_DB: targetdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./init-target.sql:/docker-entrypoint-initdb.d/init-target.sql
+      - target_data:/var/lib/postgresql/data
+    command: >
+      postgres
+      -c wal_level=logical
+      -c max_replication_slots=4
+      -c max_wal_senders=4
+      -c max_logical_replication_workers=4
+      -c log_statement=all
+      -c log_replication_commands=on
+      -c shared_preload_libraries=''
+    networks:
+      - postgres_network
+    depends_on:
+      - db_source
+
+volumes:
+  source_data:
+  target_data:
+
+networks:
+  postgres_network:
+    driver: bridge
