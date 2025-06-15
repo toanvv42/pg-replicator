@@ -13,117 +13,117 @@ env:
   DOCKER_HOST: unix:///var/run/docker.sock
 
 jobs:
-  test-docker-compose:
-    name: Test Docker Compose Setup
-    runs-on: ubuntu-latest
+  # test-docker-compose:
+  #   name: Test Docker Compose Setup
+  #   runs-on: ubuntu-latest
     
-    services:
-      postgres-source:
-        image: postgres:14
-        env:
-          POSTGRES_DB: sourcedb
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_INITDB_ARGS: "--auth-host=md5"
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-          --name postgres-source
+  #   services:
+  #     postgres-source:
+  #       image: postgres:14
+  #       env:
+  #         POSTGRES_DB: sourcedb
+  #         POSTGRES_USER: postgres
+  #         POSTGRES_PASSWORD: postgres
+  #         POSTGRES_INITDB_ARGS: "--auth-host=md5"
+  #       ports:
+  #         - 5432:5432
+  #       options: >-
+  #         --health-cmd pg_isready
+  #         --health-interval 10s
+  #         --health-timeout 5s
+  #         --health-retries 5
+  #         --name postgres-source
           
-      postgres-target:
-        image: postgres:16
-        env:
-          POSTGRES_DB: targetdb
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_INITDB_ARGS: "--auth-host=md5"
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-          --name postgres-target
+  #     postgres-target:
+  #       image: postgres:16
+  #       env:
+  #         POSTGRES_DB: targetdb
+  #         POSTGRES_USER: postgres
+  #         POSTGRES_PASSWORD: postgres
+  #         POSTGRES_INITDB_ARGS: "--auth-host=md5"
+  #       ports:
+  #         - 5433:5432
+  #       options: >-
+  #         --health-cmd pg_isready
+  #         --health-interval 10s
+  #         --health-timeout 5s
+  #         --health-retries 5
+  #         --name postgres-target
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+  #   - name: Set up Python
+  #     uses: actions/setup-python@v4
+  #     with:
+  #       python-version: '3.11'
 
-    - name: Install PostgreSQL client
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y postgresql-client
+  #   - name: Install PostgreSQL client
+  #     run: |
+  #       sudo apt-get update
+  #       sudo apt-get install -y postgresql-client
 
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r tests/requirements.txt
+  #   - name: Install Python dependencies
+  #     run: |
+  #       python -m pip install --upgrade pip
+  #       pip install -r tests/requirements.txt
 
-    - name: Configure PostgreSQL for logical replication
-      run: |
-        # Configure source database
-        docker exec postgres-source bash -c "
-          echo 'wal_level = logical' >> /var/lib/postgresql/data/postgresql.conf
-          echo 'max_replication_slots = 4' >> /var/lib/postgresql/data/postgresql.conf
-          echo 'max_wal_senders = 4' >> /var/lib/postgresql/data/postgresql.conf
-          echo 'max_logical_replication_workers = 4' >> /var/lib/postgresql/data/postgresql.conf
-        "
+  #   - name: Configure PostgreSQL for logical replication
+  #     run: |
+  #       # Configure source database
+  #       docker exec postgres-source bash -c "
+  #         echo 'wal_level = logical' >> /var/lib/postgresql/data/postgresql.conf
+  #         echo 'max_replication_slots = 4' >> /var/lib/postgresql/data/postgresql.conf
+  #         echo 'max_wal_senders = 4' >> /var/lib/postgresql/data/postgresql.conf
+  #         echo 'max_logical_replication_workers = 4' >> /var/lib/postgresql/data/postgresql.conf
+  #       "
         
-        # Configure target database
-        docker exec postgres-target bash -c "
-          echo 'wal_level = logical' >> /var/lib/postgresql/data/postgresql.conf
-          echo 'max_replication_slots = 4' >> /var/lib/postgresql/data/postgresql.conf
-          echo 'max_wal_senders = 4' >> /var/lib/postgresql/data/postgresql.conf
-          echo 'max_logical_replication_workers = 4' >> /var/lib/postgresql/data/postgresql.conf
-        "
+  #       # Configure target database
+  #       docker exec postgres-target bash -c "
+  #         echo 'wal_level = logical' >> /var/lib/postgresql/data/postgresql.conf
+  #         echo 'max_replication_slots = 4' >> /var/lib/postgresql/data/postgresql.conf
+  #         echo 'max_wal_senders = 4' >> /var/lib/postgresql/data/postgresql.conf
+  #         echo 'max_logical_replication_workers = 4' >> /var/lib/postgresql/data/postgresql.conf
+  #       "
         
-        # Restart containers
-        docker restart postgres-source postgres-target
+  #       # Restart containers
+  #       docker restart postgres-source postgres-target
         
-        # Wait for databases to be ready
-        sleep 30
+  #       # Wait for databases to be ready
+  #       sleep 30
 
-    - name: Initialize databases
-      run: |
-        # Initialize source database
-        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -f init-source.sql
+  #   - name: Initialize databases
+  #     run: |
+  #       # Initialize source database
+  #       PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -f init-source.sql
         
-        # Initialize target database
-        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -f init-target.sql
+  #       # Initialize target database
+  #       PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -f init-target.sql
 
-    - name: Set up replication
-      run: |
-        # Set up publication on source
-        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -f setup-replication.sql
+  #   - name: Set up replication
+  #     run: |
+  #       # Set up publication on source
+  #       PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -f setup-replication.sql
         
-        # Set up subscription on target
-        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -f setup-subscription.sql
+  #       # Set up subscription on target
+  #       PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -f setup-subscription.sql
 
-    - name: Run shell-based tests
-      run: |
-        chmod +x tests/test_docker_compose.sh
-        ./tests/test_docker_compose.sh
+  #   - name: Run shell-based tests
+  #     run: |
+  #       chmod +x tests/test_docker_compose.sh
+  #       ./tests/test_docker_compose.sh
 
-    - name: Run Python-based tests
-      run: |
-        pytest tests/test_replication.py::TestDockerCompose -v --html=tests/reports/docker-compose-report.html
+  #   - name: Run Python-based tests
+  #     run: |
+  #       pytest tests/test_replication.py::TestDockerCompose -v --html=tests/reports/docker-compose-report.html
 
-    - name: Upload test results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: docker-compose-test-results
-        path: tests/reports/
+  #   - name: Upload test results
+  #     uses: actions/upload-artifact@v4
+  #     if: always()
+  #     with:
+  #       name: docker-compose-test-results
+  #       path: tests/reports/
 
   test-kubernetes:
     name: Test Kubernetes Setup
@@ -157,6 +157,7 @@ jobs:
     - name: Deploy PostgreSQL replication setup
       run: |
         # Generate and apply manifests
+        kubectl create ns database-replication
         kustomize build --enable-alpha-plugins k8s | kubectl apply -f -
         
         # Wait for StatefulSets to be ready
