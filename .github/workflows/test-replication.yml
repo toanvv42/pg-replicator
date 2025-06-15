@@ -158,10 +158,19 @@ jobs:
       run: |
         # Generate and apply manifests
         kustomize build --enable-alpha-plugins k8s | kubectl apply -f -
-        
         # Wait for StatefulSets to be ready
         kubectl wait --for=condition=ready pod -l app=postgres-source --timeout=300s -n database-replication
         kubectl wait --for=condition=ready pod -l app=postgres-target --timeout=300s -n database-replication
+
+    - name: Set up PostgreSQL Replication
+      run: |
+        # Apply the setup replication job
+        kubectl apply -f k8s/setup-replication-job.yaml -n database-replication
+        # Wait for the setup replication job to complete
+        kubectl wait --for=condition=complete job/setup-replication --timeout=300s -n database-replication
+        # Get job logs for setup-replication
+        echo "Logs for setup-replication job:"
+        kubectl logs job/setup-replication -n database-replication
 
     - name: Run Kubernetes test suite
       run: |

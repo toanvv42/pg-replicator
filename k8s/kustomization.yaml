@@ -6,7 +6,5 @@ resources:
   - postgres-target.yaml
   - postgres-configmap.yaml
   - postgres-secret.yaml
-  - setup-replication-job.yaml
-  - test-replication.yaml
 
 namespace: database-replication
