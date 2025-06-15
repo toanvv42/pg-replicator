@@ -1,0 +1,371 @@
+apiVersion: v1
+data:
+  init-source.sql: "-- Initialize source database (PostgreSQL 14)\n\n-- Create a sample
+    table with test data\nCREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    name
+    VARCHAR(100) NOT NULL,\n    email VARCHAR(100) UNIQUE NOT NULL,\n    created_at
+    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\n\nCREATE
+    TABLE orders (\n    id SERIAL PRIMARY KEY,\n    user_id INTEGER REFERENCES users(id),\n
+    \   product_name VARCHAR(200) NOT NULL,\n    amount DECIMAL(10,2) NOT NULL,\n
+    \   order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\n\n-- Insert sample data\nINSERT
+    INTO users (name, email) VALUES \n    ('John Doe', 'john.doe@example.com'),\n
+    \   ('Jane Smith', 'jane.smith@example.com'),\n    ('Bob Johnson', 'bob.johnson@example.com'),\n
+    \   ('Alice Brown', 'alice.brown@example.com'),\n    ('Charlie Wilson', 'charlie.wilson@example.com');\n\nINSERT
+    INTO orders (user_id, product_name, amount) VALUES \n    (1, 'Laptop', 999.99),\n
+    \   (2, 'Mouse', 29.99),\n    (1, 'Keyboard', 79.99),\n    (3, 'Monitor', 299.99),\n
+    \   (4, 'Headphones', 149.99),\n    (5, 'Webcam', 89.99);\n"
+  init-target.sql: |
+    -- Initialize target database (PostgreSQL 16)
+
+    -- Create the same schema as source database
+    CREATE TABLE users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        email VARCHAR(100) UNIQUE NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE orders (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id),
+        product_name VARCHAR(200) NOT NULL,
+        amount DECIMAL(10,2) NOT NULL,
+        order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  setup-replication.sql: |
+    -- Setup script for logical replication
+    -- Run this on the SOURCE database (PostgreSQL 14)
+
+    -- Create publication for all tables
+    CREATE PUBLICATION my_publication FOR ALL TABLES;
+
+    -- Verify publication was created
+    SELECT * FROM pg_publication;
+
+    -- Show current replication slots (should be empty initially)
+    SELECT * FROM pg_replication_slots;
+  setup-subscription.sql: |
+    -- Setup script for subscription
+    -- Run this on the TARGET database (PostgreSQL 16)
+
+    -- Create subscription to replicate from source
+    CREATE SUBSCRIPTION my_subscription
+        CONNECTION 'host=postgres-source port=5432 dbname=sourcedb user=postgres password=postgres'
+        PUBLICATION my_publication
+        WITH (copy_data = true, create_slot = true);
+  source.db: sourcedb
+  target.db: targetdb
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: database-replication
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: database-replication
+stringData:
+  password: postgres
+  username: postgres
+type: Opaque
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-source
+  namespace: database-replication
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+  selector:
+    app: postgres-source
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-target
+  namespace: database-replication
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+  selector:
+    app: postgres-target
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: postgres-source
+  name: postgres-source
+  namespace: database-replication
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-source
+  serviceName: postgres-source
+  template:
+    metadata:
+      labels:
+        app: postgres-source
+    spec:
+      containers:
+      - args:
+        - postgres
+        - -c
+        - wal_level=logical
+        - -c
+        - max_replication_slots=4
+        - -c
+        - max_wal_senders=4
+        - -c
+        - max_logical_replication_workers=4
+        - -c
+        - log_statement=all
+        - -c
+        - log_replication_commands=on
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              key: source.db
+              name: postgres-config
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              key: username
+              name: postgres-secret
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: postgres-secret
+        image: postgres:14
+        name: postgres
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - mountPath: /var/lib/postgresql/data
+          name: postgres-source-data
+        - mountPath: /docker-entrypoint-initdb.d
+          name: init-source-script
+      volumes:
+      - configMap:
+          items:
+          - key: init-source.sql
+            path: init-source.sql
+          name: postgres-config
+        name: init-source-script
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-source-data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: postgres-target
+  name: postgres-target
+  namespace: database-replication
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-target
+  serviceName: postgres-target
+  template:
+    metadata:
+      labels:
+        app: postgres-target
+    spec:
+      containers:
+      - args:
+        - postgres
+        - -c
+        - wal_level=logical
+        - -c
+        - max_replication_slots=4
+        - -c
+        - max_wal_senders=4
+        - -c
+        - max_logical_replication_workers=4
+        - -c
+        - log_statement=all
+        - -c
+        - log_replication_commands=on
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              key: target.db
+              name: postgres-config
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              key: username
+              name: postgres-secret
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: postgres-secret
+        image: postgres:16
+        name: postgres
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - mountPath: /var/lib/postgresql/data
+          name: postgres-target-data
+        - mountPath: /docker-entrypoint-initdb.d
+          name: init-target-script
+      volumes:
+      - configMap:
+          items:
+          - key: init-target.sql
+            path: init-target.sql
+          name: postgres-config
+        name: init-target-script
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-target-data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: setup-replication
+  namespace: database-replication
+spec:
+  template:
+    spec:
+      containers:
+      - command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Waiting for source database to be ready..."
+          until PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-source -U $POSTGRES_USER -d $SOURCE_DB -c '\q'; do
+            echo "Waiting for source database..."
+            sleep 5
+          done
+
+          echo "Waiting for target database to be ready..."
+          until PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-target -U $POSTGRES_USER -d $TARGET_DB -c '\q'; do
+            echo "Waiting for target database..."
+            sleep 5
+          done
+
+          echo "Setting up publication on source database..."
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-source -U $POSTGRES_USER -d $SOURCE_DB -f /scripts/setup-replication.sql
+
+          echo "Setting up subscription on target database..."
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-target -U $POSTGRES_USER -d $TARGET_DB -f /scripts/setup-subscription.sql
+
+          echo "Replication setup completed successfully!"
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              key: username
+              name: postgres-secret
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: postgres-secret
+        - name: SOURCE_DB
+          valueFrom:
+            configMapKeyRef:
+              key: source.db
+              name: postgres-config
+        - name: TARGET_DB
+          valueFrom:
+            configMapKeyRef:
+              key: target.db
+              name: postgres-config
+        image: postgres:14
+        name: setup-replication
+        volumeMounts:
+        - mountPath: /scripts
+          name: scripts
+      restartPolicy: OnFailure
+      volumes:
+      - configMap:
+          items:
+          - key: setup-replication.sql
+            path: setup-replication.sql
+          - key: setup-subscription.sql
+            path: setup-subscription.sql
+          name: postgres-config
+        name: scripts
+  ttlSecondsAfterFinished: 100
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-replication
+  namespace: database-replication
+spec:
+  template:
+    spec:
+      containers:
+      - command:
+        - /bin/bash
+        - -c
+        - "echo \"Testing replication...\"\n\necho \"Inserting test data on source
+          database...\"\nPGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-source -U
+          $POSTGRES_USER -d $SOURCE_DB << EOF\n-- Insert new test data\nINSERT INTO
+          users (name, email) VALUES \n    ('Test User K8s', 'testk8s@example.com'),\n
+          \   ('Test User K8s 2', 'testk8s2@example.com');\n    \n-- Update existing
+          data\nUPDATE users SET name = 'John Doe (K8s Updated)' WHERE id = 1;\n\n--
+          Insert new orders\nINSERT INTO orders (user_id, product_name, amount) VALUES
+          \n    (1, 'K8s Test Product', 199.99),\n    (2, 'Another K8s Test Product',
+          299.99);\n    \n-- Show current data in source\nSELECT 'SOURCE - Users:'
+          as info;\nSELECT * FROM users ORDER BY id;\n\nSELECT 'SOURCE - Orders:'
+          as info;\nSELECT * FROM orders ORDER BY id;\nEOF\n\necho \"Waiting 10 seconds
+          for replication to sync...\"\nsleep 10\n\necho \"Verifying data on target
+          database...\"\nPGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-target -U
+          $POSTGRES_USER -d $TARGET_DB << EOF\n-- Check replicated data in target\nSELECT
+          'TARGET - Users:' as info;\nSELECT * FROM users ORDER BY id;\n\nSELECT 'TARGET
+          - Orders:' as info;\nSELECT * FROM orders ORDER BY id;\n\n-- Check subscription
+          status\nSELECT 'Subscription Status:' as info;\nSELECT subname, subenabled,
+          subconninfo FROM pg_subscription;\nEOF\n\necho \"Replication test completed!\"\n"
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              key: username
+              name: postgres-secret
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: postgres-secret
+        - name: SOURCE_DB
+          valueFrom:
+            configMapKeyRef:
+              key: source.db
+              name: postgres-config
+        - name: TARGET_DB
+          valueFrom:
+            configMapKeyRef:
+              key: target.db
+              name: postgres-config
+        image: postgres:14
+        name: test-replication
+      restartPolicy: OnFailure
+  ttlSecondsAfterFinished: 100

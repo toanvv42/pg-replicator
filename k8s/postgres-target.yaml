@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-target
+  labels:
+    app: postgres-target
+spec:
+  serviceName: postgres-target
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-target
+  template:
+    metadata:
+      labels:
+        app: postgres-target
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16
+        args:
+        - postgres
+        - -c
+        - wal_level=logical
+        - -c
+        - max_replication_slots=4
+        - -c
+        - max_wal_senders=4
+        - -c
+        - max_logical_replication_workers=4
+        - -c
+        - log_statement=all
+        - -c
+        - log_replication_commands=on
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: postgres-config
+              key: target.db
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: password
+        volumeMounts:
+        - name: postgres-target-data
+          mountPath: /var/lib/postgresql/data
+        - name: init-target-script
+          mountPath: /docker-entrypoint-initdb.d
+      volumes:
+      - name: init-target-script
+        configMap:
+          name: postgres-config
+          items:
+          - key: init-target.sql
+            path: init-target.sql
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-target-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-target
+spec:
+  selector:
+    app: postgres-target
+  ports:
+  - port: 5432
+    targetPort: 5432

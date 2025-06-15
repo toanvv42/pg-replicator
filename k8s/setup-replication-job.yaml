@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: setup-replication
+spec:
+  ttlSecondsAfterFinished: 100
+  template:
+    spec:
+      containers:
+      - name: setup-replication
+        image: postgres:14
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Waiting for source database to be ready..."
+          until PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-source -U $POSTGRES_USER -d $SOURCE_DB -c '\q'; do
+            echo "Waiting for source database..."
+            sleep 5
+          done
+          
+          echo "Waiting for target database to be ready..."
+          until PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-target -U $POSTGRES_USER -d $TARGET_DB -c '\q'; do
+            echo "Waiting for target database..."
+            sleep 5
+          done
+          
+          echo "Setting up publication on source database..."
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-source -U $POSTGRES_USER -d $SOURCE_DB -f /scripts/setup-replication.sql
+          
+          echo "Setting up subscription on target database..."
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-target -U $POSTGRES_USER -d $TARGET_DB -f /scripts/setup-subscription.sql
+          
+          echo "Replication setup completed successfully!"
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: password
+        - name: SOURCE_DB
+          valueFrom:
+            configMapKeyRef:
+              name: postgres-config
+              key: source.db
+        - name: TARGET_DB
+          valueFrom:
+            configMapKeyRef:
+              name: postgres-config
+              key: target.db
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+      volumes:
+      - name: scripts
+        configMap:
+          name: postgres-config
+          items:
+          - key: setup-replication.sql
+            path: setup-replication.sql
+          - key: setup-subscription.sql
+            path: setup-subscription.sql
+      restartPolicy: OnFailure

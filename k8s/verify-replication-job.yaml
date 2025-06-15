@@ -1,0 +1,113 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: verify-replication
+spec:
+  ttlSecondsAfterFinished: 100
+  template:
+    spec:
+      containers:
+      - name: verify-replication
+        image: postgres:14
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Verifying replication setup..."
+          
+          echo "Waiting for source database to be ready..."
+          until PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-source -U $POSTGRES_USER -d $SOURCE_DB -c '\q'; do
+            echo "Waiting for source database..."
+            sleep 5
+          done
+          
+          echo "Waiting for target database to be ready..."
+          until PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-target -U $POSTGRES_USER -d $TARGET_DB -c '\q'; do
+            echo "Waiting for target database..."
+            sleep 5
+          done
+          
+          echo "Checking initial data on source database..."
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-source -U $POSTGRES_USER -d $SOURCE_DB << EOF
+          SELECT 'SOURCE - Users count:' as info, count(*) from users;
+          SELECT 'SOURCE - Orders count:' as info, count(*) from orders;
+          EOF
+          
+          echo "Checking initial data on target database..."
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-target -U $POSTGRES_USER -d $TARGET_DB << EOF
+          SELECT 'TARGET - Users count:' as info, count(*) from users;
+          SELECT 'TARGET - Orders count:' as info, count(*) from orders;
+          EOF
+          
+          echo "Inserting test data on source database..."
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-source -U $POSTGRES_USER -d $SOURCE_DB << EOF
+          -- Insert new test data
+          INSERT INTO users (name, email) VALUES 
+              ('K8s Test User 1', 'k8stest1@example.com'),
+              ('K8s Test User 2', 'k8stest2@example.com');
+              
+          -- Update existing data
+          UPDATE users SET name = 'John Doe (K8s Updated)' WHERE id = 1;
+          
+          -- Insert new orders
+          INSERT INTO orders (user_id, product_name, amount) VALUES 
+              (1, 'K8s Test Product', 199.99),
+              (2, 'Another K8s Test Product', 299.99);
+              
+          -- Show current data in source
+          SELECT 'SOURCE - Users after insert:' as info;
+          SELECT * FROM users ORDER BY id;
+          
+          SELECT 'SOURCE - Orders after insert:' as info;
+          SELECT * FROM orders ORDER BY id;
+          EOF
+          
+          echo "Waiting 10 seconds for replication to sync..."
+          sleep 10
+          
+          echo "Verifying data on target database..."
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-target -U $POSTGRES_USER -d $TARGET_DB << EOF
+          -- Check replicated data in target
+          SELECT 'TARGET - Users after replication:' as info;
+          SELECT * FROM users ORDER BY id;
+          
+          SELECT 'TARGET - Orders after replication:' as info;
+          SELECT * FROM orders ORDER BY id;
+          
+          -- Check subscription status
+          SELECT 'Subscription Status:' as info;
+          SELECT subname, subenabled, subconninfo FROM pg_subscription;
+          EOF
+          
+          echo "Checking replication status on source..."
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-source -U $POSTGRES_USER -d $SOURCE_DB << EOF
+          SELECT 'Replication Slots:' as info;
+          SELECT slot_name, plugin, slot_type, active, restart_lsn FROM pg_replication_slots;
+          
+          SELECT 'Replication Stats:' as info;
+          SELECT application_name, state, sent_lsn, write_lsn, flush_lsn, replay_lsn FROM pg_stat_replication;
+          EOF
+          
+          echo "Replication verification completed!"
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: password
+        - name: SOURCE_DB
+          valueFrom:
+            configMapKeyRef:
+              name: postgres-config
+              key: source.db
+        - name: TARGET_DB
+          valueFrom:
+            configMapKeyRef:
+              name: postgres-config
+              key: target.db
+      restartPolicy: OnFailure

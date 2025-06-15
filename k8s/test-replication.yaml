@@ -1,0 +1,80 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-replication
+spec:
+  ttlSecondsAfterFinished: 100
+  template:
+    spec:
+      containers:
+      - name: test-replication
+        image: postgres:14
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Testing replication..."
+          
+          echo "Inserting test data on source database..."
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-source -U $POSTGRES_USER -d $SOURCE_DB << EOF
+          -- Insert new test data
+          INSERT INTO users (name, email) VALUES 
+              ('Test User K8s', 'testk8s@example.com'),
+              ('Test User K8s 2', 'testk8s2@example.com');
+              
+          -- Update existing data
+          UPDATE users SET name = 'John Doe (K8s Updated)' WHERE id = 1;
+          
+          -- Insert new orders
+          INSERT INTO orders (user_id, product_name, amount) VALUES 
+              (1, 'K8s Test Product', 199.99),
+              (2, 'Another K8s Test Product', 299.99);
+              
+          -- Show current data in source
+          SELECT 'SOURCE - Users:' as info;
+          SELECT * FROM users ORDER BY id;
+          
+          SELECT 'SOURCE - Orders:' as info;
+          SELECT * FROM orders ORDER BY id;
+          EOF
+          
+          echo "Waiting 10 seconds for replication to sync..."
+          sleep 10
+          
+          echo "Verifying data on target database..."
+          PGPASSWORD=$POSTGRES_PASSWORD psql -h postgres-target -U $POSTGRES_USER -d $TARGET_DB << EOF
+          -- Check replicated data in target
+          SELECT 'TARGET - Users:' as info;
+          SELECT * FROM users ORDER BY id;
+          
+          SELECT 'TARGET - Orders:' as info;
+          SELECT * FROM orders ORDER BY id;
+          
+          -- Check subscription status
+          SELECT 'Subscription Status:' as info;
+          SELECT subname, subenabled, subconninfo FROM pg_subscription;
+          EOF
+          
+          echo "Replication test completed!"
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: password
+        - name: SOURCE_DB
+          valueFrom:
+            configMapKeyRef:
+              name: postgres-config
+              key: source.db
+        - name: TARGET_DB
+          valueFrom:
+            configMapKeyRef:
+              name: postgres-config
+              key: target.db
+      restartPolicy: OnFailure
