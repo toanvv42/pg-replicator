@@ -35,6 +35,19 @@ help:
 	@echo "  k8s-monitor   - Monitor replication status in Kubernetes"
 	@echo "  encrypt-secrets - Encrypt Kubernetes secrets using sops"
 	@echo ""
+	@echo "Test commands:"
+	@echo "  test-docker-setup   - Install Python test dependencies"
+	@echo "  test-docker-shell   - Run shell-based tests for Docker Compose"
+	@echo "  test-docker-python  - Run Python-based tests for Docker Compose"
+	@echo "  test-docker         - Run all Docker Compose tests"
+	@echo "  test-k8s-suite      - Run Kubernetes test suite job"
+	@echo "  test-k8s-python     - Run Python-based tests for Kubernetes"
+	@echo "  test-k8s            - Run all Kubernetes tests"
+	@echo "  test-all            - Run all tests (Docker + Kubernetes)"
+	@echo "  test-status-docker  - Show Docker Compose replication status"
+	@echo "  test-status-k8s     - Show Kubernetes replication status"
+	@echo "  test-clean          - Clean up test artifacts"
+	@echo ""
 	@echo "Note: This Makefile uses Podman. Set DOCKER_HOST environment variable if needed."
 	@echo "For Kubernetes manifests, kustomize build --enable-alpha-plugins is used."
 
@@ -162,3 +175,50 @@ encrypt-secrets:
 	@echo "Encrypting secrets with sops..."
 	@sops -e -i k8s/postgres-secret.yaml
 	@echo "Secrets encrypted successfully"
+
+# Test targets
+test-docker-setup:
+	@echo "Setting up test environment for Docker Compose..."
+	@pip3 install -r tests/requirements.txt || echo "Please install Python dependencies manually"
+
+test-docker-shell:
+	@echo "Running shell-based tests for Docker Compose..."
+	@chmod +x tests/test_docker_compose.sh
+	@./tests/test_docker_compose.sh
+
+test-docker-python:
+	@echo "Running Python-based tests for Docker Compose..."
+	@python3 -m pytest tests/test_replication.py::TestDockerCompose -v
+
+test-docker: test-docker-shell test-docker-python
+	@echo "All Docker Compose tests completed"
+
+test-k8s-suite:
+	@echo "Running Kubernetes test suite..."
+	@kubectl apply -f k8s/test-suite-job.yaml -n database-replication
+	@kubectl wait --for=condition=complete job/replication-test-suite --timeout=600s -n database-replication || true
+	@kubectl logs job/replication-test-suite -n database-replication
+
+test-k8s-python:
+	@echo "Running Python-based tests for Kubernetes..."
+	@python3 -m pytest tests/test_replication.py::TestKubernetes -v
+
+test-k8s: test-k8s-suite
+	@echo "All Kubernetes tests completed"
+
+test-all: test-docker test-k8s
+	@echo "All tests completed"
+
+test-status-docker:
+	@echo "Showing Docker Compose replication status..."
+	@./tests/test_docker_compose.sh --status
+
+test-status-k8s:
+	@echo "Showing Kubernetes replication status..."
+	@make k8s-monitor
+
+# Test cleanup
+test-clean:
+	@echo "Cleaning up test artifacts..."
+	@rm -rf tests/reports/
+	@kubectl delete job replication-test-suite -n database-replication --ignore-not-found=true

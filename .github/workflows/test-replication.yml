@@ -1,0 +1,200 @@
+name: PostgreSQL Logical Replication Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run tests daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+env:
+  DOCKER_HOST: unix:///var/run/docker.sock
+
+jobs:
+  test-docker-compose:
+    name: Test Docker Compose Setup
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres-source:
+        image: postgres:14
+        env:
+          POSTGRES_DB: sourcedb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_INITDB_ARGS: "--auth-host=md5"
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --name postgres-source
+          
+      postgres-target:
+        image: postgres:16
+        env:
+          POSTGRES_DB: targetdb
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_INITDB_ARGS: "--auth-host=md5"
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --name postgres-target
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install PostgreSQL client
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y postgresql-client
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r tests/requirements.txt
+
+    - name: Configure PostgreSQL for logical replication
+      run: |
+        # Configure source database
+        docker exec postgres-source bash -c "
+          echo 'wal_level = logical' >> /var/lib/postgresql/data/postgresql.conf
+          echo 'max_replication_slots = 4' >> /var/lib/postgresql/data/postgresql.conf
+          echo 'max_wal_senders = 4' >> /var/lib/postgresql/data/postgresql.conf
+          echo 'max_logical_replication_workers = 4' >> /var/lib/postgresql/data/postgresql.conf
+        "
+        
+        # Configure target database
+        docker exec postgres-target bash -c "
+          echo 'wal_level = logical' >> /var/lib/postgresql/data/postgresql.conf
+          echo 'max_replication_slots = 4' >> /var/lib/postgresql/data/postgresql.conf
+          echo 'max_wal_senders = 4' >> /var/lib/postgresql/data/postgresql.conf
+          echo 'max_logical_replication_workers = 4' >> /var/lib/postgresql/data/postgresql.conf
+        "
+        
+        # Restart containers
+        docker restart postgres-source postgres-target
+        
+        # Wait for databases to be ready
+        sleep 30
+
+    - name: Initialize databases
+      run: |
+        # Initialize source database
+        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -f init-source.sql
+        
+        # Initialize target database
+        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -f init-target.sql
+
+    - name: Set up replication
+      run: |
+        # Set up publication on source
+        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -f setup-replication.sql
+        
+        # Set up subscription on target
+        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -f setup-subscription.sql
+
+    - name: Run shell-based tests
+      run: |
+        chmod +x tests/test_docker_compose.sh
+        ./tests/test_docker_compose.sh
+
+    - name: Run Python-based tests
+      run: |
+        pytest tests/test_replication.py::TestDockerCompose -v --html=tests/reports/docker-compose-report.html
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: docker-compose-test-results
+        path: tests/reports/
+
+  test-kubernetes:
+    name: Test Kubernetes Setup
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r tests/requirements.txt
+
+    - name: Create kind cluster
+      uses: helm/kind-action@v1.8.0
+      with:
+        cluster_name: replication-test
+        wait: 300s
+
+    - name: Install kustomize
+      run: |
+        curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+        sudo mv kustomize /usr/local/bin/
+
+    - name: Deploy PostgreSQL replication setup
+      run: |
+        # Generate and apply manifests
+        kustomize build --enable-alpha-plugins k8s | kubectl apply -f -
+        
+        # Wait for StatefulSets to be ready
+        kubectl wait --for=condition=ready pod -l app=postgres-source --timeout=300s -n database-replication
+        kubectl wait --for=condition=ready pod -l app=postgres-target --timeout=300s -n database-replication
+
+    - name: Run Kubernetes test suite
+      run: |
+        # Apply test suite job
+        kubectl apply -f k8s/test-suite-job.yaml -n database-replication
+        
+        # Wait for job completion
+        kubectl wait --for=condition=complete job/replication-test-suite --timeout=600s -n database-replication
+        
+        # Get job logs
+        kubectl logs job/replication-test-suite -n database-replication
+
+    - name: Run Python-based Kubernetes tests
+      run: |
+        # Port forward to access databases from test runner
+        kubectl port-forward svc/postgres-source 5432:5432 -n database-replication &
+        kubectl port-forward svc/postgres-target 5433:5432 -n database-replication &
+        sleep 10
+        
+        # Run tests (modify config for port forwarding)
+        pytest tests/test_replication.py::TestKubernetes -v --html=tests/reports/kubernetes-report.html
+
+    - name: Collect Kubernetes logs
+      if: always()
+      run: |
+        mkdir -p tests/reports/k8s-logs
+        kubectl logs -l app=postgres-source -n database-replication > tests/reports/k8s-logs/postgres-source.log
+        kubectl logs -l app=postgres-target -n database-replication > tests/reports/k8s-logs/postgres-target.log
+        kubectl describe pods -n database-replication > tests/reports/k8s-logs/pod-descriptions.txt
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: kubernetes-test-results
+        path: tests/reports/
