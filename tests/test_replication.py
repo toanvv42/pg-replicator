@@ -329,17 +329,22 @@ def get_docker_compose_config() -> Tuple[DatabaseConfig, DatabaseConfig]:
 # Kubernetes Test Configuration
 def get_kubernetes_config() -> Tuple[DatabaseConfig, DatabaseConfig]:
     """Get database configurations for Kubernetes setup"""
+    source_host = os.environ.get('K8S_SOURCE_HOST', 'postgres-source.database-replication.svc.cluster.local')
+    source_port = int(os.environ.get('K8S_SOURCE_PORT', '5432'))
+    target_host = os.environ.get('K8S_TARGET_HOST', 'postgres-target.database-replication.svc.cluster.local')
+    target_port = int(os.environ.get('K8S_TARGET_PORT', '5432'))
+
     source_config = DatabaseConfig(
-        host='postgres-source.database-replication.svc.cluster.local',
-        port=5432,
+        host=source_host,
+        port=source_port,
         database='sourcedb',
         username='postgres',
         password='postgres'
     )
     
     target_config = DatabaseConfig(
-        host='postgres-target.database-replication.svc.cluster.local',
-        port=5432,
+        host=target_host,
+        port=target_port,
         database='targetdb',
         username='postgres',
         password='postgres'

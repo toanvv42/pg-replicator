@@ -95,52 +95,19 @@ jobs:
 
     - name: Initialize databases
       run: |
-        # Create test tables on source database
-        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -c "
-          CREATE TABLE IF NOT EXISTS users (
-              id SERIAL PRIMARY KEY,
-              name VARCHAR(100) NOT NULL,
-              email VARCHAR(100) UNIQUE NOT NULL
-          );
-          
-          CREATE TABLE IF NOT EXISTS orders (
-              id SERIAL PRIMARY KEY,
-              user_id INTEGER REFERENCES users(id),
-              product_name VARCHAR(100) NOT NULL,
-              amount NUMERIC(10,2) NOT NULL
-          );
-        "
+        # Initialize source database
+        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -f init-source.sql
         
-        # Create same tables on target database
-        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -c "
-          CREATE TABLE IF NOT EXISTS users (
-              id SERIAL PRIMARY KEY,
-              name VARCHAR(100) NOT NULL,
-              email VARCHAR(100) UNIQUE NOT NULL
-          );
-          
-          CREATE TABLE IF NOT EXISTS orders (
-              id SERIAL PRIMARY KEY,
-              user_id INTEGER REFERENCES users(id),
-              product_name VARCHAR(100) NOT NULL,
-              amount NUMERIC(10,2) NOT NULL
-          );
-        "
+        # Initialize target database
+        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -f init-target.sql
 
     - name: Set up replication
       run: |
         # Set up publication on source
-        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -c "CREATE PUBLICATION my_publication FOR ALL TABLES;"
+        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -f setup-replication.sql
         
-        # Set up subscription on target with correct connection parameters
-        # First drop the subscription if it exists
-        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -c "DROP SUBSCRIPTION IF EXISTS my_subscription;"
-        
-        # Then create the subscription in a separate command (outside transaction)
-        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -c "CREATE SUBSCRIPTION my_subscription CONNECTION 'host=localhost port=5432 dbname=sourcedb user=postgres password=postgres' PUBLICATION my_publication WITH (copy_data = true, create_slot = true);"
-        
-        # Wait for replication to be established
-        sleep 10
+        # Set up subscription on target
+        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -f setup-subscription.sql
 
     - name: Run shell-based tests
       run: |
@@ -190,7 +157,6 @@ jobs:
     - name: Deploy PostgreSQL replication setup
       run: |
         # Generate and apply manifests
-        kubectl create ns database-replication
         kustomize build --enable-alpha-plugins k8s | kubectl apply -f -
         
         # Wait for StatefulSets to be ready
@@ -215,6 +181,12 @@ jobs:
         kubectl port-forward svc/postgres-target 5433:5432 -n database-replication &
         sleep 10
         
+        # Set environment variables for Pytest
+        export K8S_SOURCE_HOST=localhost
+        export K8S_SOURCE_PORT=5432
+        export K8S_TARGET_HOST=localhost
+        export K8S_TARGET_PORT=5433
+
         # Run tests (modify config for port forwarding)
         pytest tests/test_replication.py::TestKubernetes -v --html=tests/reports/kubernetes-report.html
 
