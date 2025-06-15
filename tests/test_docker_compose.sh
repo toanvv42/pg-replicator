@@ -117,6 +117,22 @@ test_replication_setup() {
         test_fail "Publication exists on source"
     fi
     
+    # Create subscription if it doesn't exist
+    local sub_exists
+    sub_exists=$(PGPASSWORD="$DB_PASSWORD" psql -h "$TARGET_HOST" -p "$TARGET_PORT" -U "$DB_USER" -d "$TARGET_DB" -t -c "SELECT COUNT(*) FROM pg_subscription WHERE subname = 'my_subscription';" 2>/dev/null | tr -d ' ')
+    
+    if [ "$sub_exists" = "0" ]; then
+        log_info "Subscription does not exist. Creating subscription..."
+        PGPASSWORD="$DB_PASSWORD" psql -h "$TARGET_HOST" -p "$TARGET_PORT" -U "$DB_USER" -d "$TARGET_DB" -c "
+            DROP SUBSCRIPTION IF EXISTS my_subscription;
+            CREATE SUBSCRIPTION my_subscription 
+            CONNECTION 'host=$SOURCE_HOST port=$SOURCE_PORT dbname=$SOURCE_DB user=$DB_USER password=$DB_PASSWORD' 
+            PUBLICATION my_publication 
+            WITH (copy_data = true, create_slot = true);
+        " 2>/dev/null
+        sleep 5  # Give it time to create the slot
+    fi
+    
     # Test subscription exists on target
     local sub_count
     sub_count=$(PGPASSWORD="$DB_PASSWORD" psql -h "$TARGET_HOST" -p "$TARGET_PORT" -U "$DB_USER" -d "$TARGET_DB" -t -c "SELECT COUNT(*) FROM pg_subscription WHERE subname = 'my_subscription';" 2>/dev/null | tr -d ' ')
@@ -157,31 +173,52 @@ test_data_replication() {
     local test_name="Test User ${test_timestamp}"
     local test_product="Test Product ${test_timestamp}"
     
+    # Ensure test tables exist
+    log_info "Ensuring test tables exist..."
+    PGPASSWORD="$DB_PASSWORD" psql -h "$SOURCE_HOST" -p "$SOURCE_PORT" -U "$DB_USER" -d "$SOURCE_DB" -c "
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            email VARCHAR(100) UNIQUE NOT NULL
+        );
+        
+        CREATE TABLE IF NOT EXISTS orders (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id),
+            product_name VARCHAR(100) NOT NULL,
+            amount NUMERIC(10,2) NOT NULL
+        );
+    " > /dev/null 2>&1
+    
     # Insert test data on source
     log_info "Inserting test data on source..."
     local insert_result
     insert_result=$(PGPASSWORD="$DB_PASSWORD" psql -h "$SOURCE_HOST" -p "$SOURCE_PORT" -U "$DB_USER" -d "$SOURCE_DB" -t -c "
         INSERT INTO users (name, email) VALUES ('$test_name', '$test_email') RETURNING id;
-    " 2>/dev/null | tr -d ' ')
+    " 2>/dev/null)
     
-    if [ -n "$insert_result" ] && [ "$insert_result" -gt 0 ]; then
-        test_pass "Test user inserted on source"
-        local test_user_id="$insert_result"
+    # Properly extract the ID value
+    test_user_id=$(echo "$insert_result" | tr -d ' ')
+    
+    if [[ "$test_user_id" =~ ^[0-9]+$ ]]; then
+        test_pass "Test user inserted on source (ID: $test_user_id)"
         
         # Insert test order
         local order_result
         order_result=$(PGPASSWORD="$DB_PASSWORD" psql -h "$SOURCE_HOST" -p "$SOURCE_PORT" -U "$DB_USER" -d "$SOURCE_DB" -t -c "
             INSERT INTO orders (user_id, product_name, amount) VALUES ($test_user_id, '$test_product', 99.99) RETURNING id;
-        " 2>/dev/null | tr -d ' ')
+        " 2>/dev/null)
         
-        if [ -n "$order_result" ] && [ "$order_result" -gt 0 ]; then
-            test_pass "Test order inserted on source"
+        local test_order_id=$(echo "$order_result" | tr -d ' ')
+        
+        if [[ "$test_order_id" =~ ^[0-9]+$ ]]; then
+            test_pass "Test order inserted on source (ID: $test_order_id)"
         else
             test_fail "Test order inserted on source"
             return 1
         fi
     else
-        test_fail "Test user inserted on source"
+        test_fail "Test user inserted on source (got: '$test_user_id')"
         return 1
     fi
     

@@ -95,19 +95,54 @@ jobs:
 
     - name: Initialize databases
       run: |
-        # Initialize source database
-        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -f init-source.sql
+        # Create test tables on source database
+        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -c "
+          CREATE TABLE IF NOT EXISTS users (
+              id SERIAL PRIMARY KEY,
+              name VARCHAR(100) NOT NULL,
+              email VARCHAR(100) UNIQUE NOT NULL
+          );
+          
+          CREATE TABLE IF NOT EXISTS orders (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER REFERENCES users(id),
+              product_name VARCHAR(100) NOT NULL,
+              amount NUMERIC(10,2) NOT NULL
+          );
+        "
         
-        # Initialize target database
-        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -f init-target.sql
+        # Create same tables on target database
+        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -c "
+          CREATE TABLE IF NOT EXISTS users (
+              id SERIAL PRIMARY KEY,
+              name VARCHAR(100) NOT NULL,
+              email VARCHAR(100) UNIQUE NOT NULL
+          );
+          
+          CREATE TABLE IF NOT EXISTS orders (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER REFERENCES users(id),
+              product_name VARCHAR(100) NOT NULL,
+              amount NUMERIC(10,2) NOT NULL
+          );
+        "
 
     - name: Set up replication
       run: |
         # Set up publication on source
-        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -f setup-replication.sql
+        PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d sourcedb -c "CREATE PUBLICATION my_publication FOR ALL TABLES;"
         
-        # Set up subscription on target
-        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -f setup-subscription.sql
+        # Set up subscription on target with correct connection parameters
+        PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d targetdb -c "
+          DROP SUBSCRIPTION IF EXISTS my_subscription;
+          CREATE SUBSCRIPTION my_subscription
+          CONNECTION 'host=localhost port=5432 dbname=sourcedb user=postgres password=postgres'
+          PUBLICATION my_publication
+          WITH (copy_data = true, create_slot = true);
+        "
+        
+        # Wait for replication to be established
+        sleep 10
 
     - name: Run shell-based tests
       run: |
