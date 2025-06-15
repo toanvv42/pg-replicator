@@ -162,7 +162,7 @@ test_data_replication() {
     local insert_result
     insert_result=$(PGPASSWORD="$DB_PASSWORD" psql -h "$SOURCE_HOST" -p "$SOURCE_PORT" -U "$DB_USER" -d "$SOURCE_DB" -t -c "
         INSERT INTO users (name, email) VALUES ('$test_name', '$test_email') RETURNING id;
-    " 2>/dev/null | tr -d ' ')
+    " 2>/dev/null | grep -o '[0-9]*' | head -n 1 | tr -d '[:space:]')
     
     if [ -n "$insert_result" ] && [ "$insert_result" -gt 0 ]; then
         test_pass "Test user inserted on source"
@@ -172,7 +172,7 @@ test_data_replication() {
         local order_result
         order_result=$(PGPASSWORD="$DB_PASSWORD" psql -h "$SOURCE_HOST" -p "$SOURCE_PORT" -U "$DB_USER" -d "$SOURCE_DB" -t -c "
             INSERT INTO orders (user_id, product_name, amount) VALUES ($test_user_id, '$test_product', 99.99) RETURNING id;
-        " 2>/dev/null | tr -d ' ')
+        " 2>/dev/null | grep -o '[0-9]*' | head -n 1 | tr -d '[:space:]')
         
         if [ -n "$order_result" ] && [ "$order_result" -gt 0 ]; then
             test_pass "Test order inserted on source"
