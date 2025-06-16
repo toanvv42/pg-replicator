@@ -21,10 +21,10 @@
 #   - `docker-compose.yml` file.
 # - Scans Python dependencies:
 #   - `tests/requirements.txt`
-# - Scans Shell scripts for code issues:
+# - Scans Shell scripts for code issues (skipped if SNYK_TOKEN is not set):
 #   - `Makefile`
 #   - `tests/test_docker_compose.sh`
-# - Monitors the project using `snyk monitor --all-projects` if SNYK_TOKEN is provided,
+# - Monitors the project using `snyk monitor --all-projects` (skipped if SNYK_TOKEN is not set),
 #   sending a snapshot to your Snyk dashboard.
 #
 # All scan steps use `continue-on-error: true` to ensure all scans are attempted
@@ -72,19 +72,21 @@ jobs:
         continue-on-error: true
 
       - name: Snyk Code scan (Shell scripts - Makefile)
+        if: env.SNYK_TOKEN != '' # Only run if SNYK_TOKEN is available
         run: snyk code test Makefile
         continue-on-error: true
 
       - name: Snyk Code scan (Shell scripts - test_docker_compose.sh)
+        if: env.SNYK_TOKEN != '' # Only run if SNYK_TOKEN is available
         run: snyk code test tests/test_docker_compose.sh
         continue-on-error: true
 
       # snyk monitor is used to continuously monitor the project in the Snyk UI
       # It requires SNYK_TOKEN to be set in GitHub secrets
       - name: Snyk Monitor (Project)
-        if: always() && (github.event_name == 'push' || github.event_name == 'pull_request') # Run on push or PR to main
+        if: always() && (github.event_name == 'push' || github.event_name == 'pull_request') && env.SNYK_TOKEN != '' # Only run if SNYK_TOKEN is available
         run: |
           snyk monitor --all-projects
         env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }} # This is still good practice for clarity, though the step is conditional
         continue-on-error: true # Optional: decide if monitoring failure should fail the build
