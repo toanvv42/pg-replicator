@@ -1,0 +1,90 @@
+# Snyk Security Scan Workflow
+#
+# This workflow integrates Snyk to perform security scans on your repository.
+#
+# Requirements:
+# 1. SNYK_TOKEN: For `snyk monitor` to function and to enable `snyk code test`,
+#    you need a Snyk API token.
+#    - Generate your token at: https://app.snyk.io/account (Service Accounts section recommended for CI)
+#    - Add this token as a GitHub secret in your repository:
+#      Settings > Secrets and variables > Actions > New repository secret
+#      Name the secret: SNYK_TOKEN
+#    - The Snyk CLI will automatically pick up this token when the `SNYK_TOKEN`
+#      environment variable is set, as configured in this workflow.
+#
+# What this workflow does:
+# - Runs on push and pull_request events to the 'main' branch.
+# - Checks out the code.
+# - Sets up the Snyk CLI, using SNYK_TOKEN if available.
+# - Scans Infrastructure as Code (IaC) files:
+#   - Kubernetes manifests in the `k8s/` directory.
+#   - `docker-compose.yml` file.
+# - Scans Python dependencies:
+#   - `tests/requirements.txt`
+# - Scans Shell scripts for code issues:
+#   - `Makefile`
+#   - `tests/test_docker_compose.sh`
+# - Monitors the project using `snyk monitor --all-projects` if SNYK_TOKEN is provided,
+#   sending a snapshot to your Snyk dashboard.
+#
+# All scan steps use `continue-on-error: true` to ensure all scans are attempted
+# and reported, rather than the workflow failing on the first detected issue.
+
+name: Snyk Security Scan
+
+on:
+  push:
+    branches:
+      - main # Adjust if your main branch has a different name
+  pull_request:
+    branches:
+      - main # Adjust if your main branch has a different name
+
+jobs:
+  snyk_scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Snyk CLI
+        uses: snyk/actions/setup@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }} # Recommended for snyk monitor and future private repo use
+
+      - name: Snyk IaC scan (Kubernetes & Docker Compose)
+        run: |
+          snyk iac test k8s/
+          snyk iac test docker-compose.yml
+        continue-on-error: true # To allow other scans to run even if this fails
+
+      - name: Setup Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: '3.x' # Specify a version if needed, e.g., 3.9
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r tests/requirements.txt
+
+      - name: Snyk Python scan
+        run: snyk test --file=tests/requirements.txt
+        continue-on-error: true
+
+      - name: Snyk Code scan (Shell scripts - Makefile)
+        run: snyk code test Makefile
+        continue-on-error: true
+
+      - name: Snyk Code scan (Shell scripts - test_docker_compose.sh)
+        run: snyk code test tests/test_docker_compose.sh
+        continue-on-error: true
+
+      # snyk monitor is used to continuously monitor the project in the Snyk UI
+      # It requires SNYK_TOKEN to be set in GitHub secrets
+      - name: Snyk Monitor (Project)
+        if: always() && (github.event_name == 'push' || github.event_name == 'pull_request') # Run on push or PR to main
+        run: |
+          snyk monitor --all-projects
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        continue-on-error: true # Optional: decide if monitoring failure should fail the build
