@@ -55,16 +55,16 @@ help:
 .PHONY: start
 start:
 	@echo "Starting PostgreSQL containers..."
-	@$(EXPORT_DOCKER_HOST) && docker compose up -d
+	@$(EXPORT_DOCKER_HOST) && docker compose -f docker/docker-compose.yml up -d
 	@echo "Waiting for databases to initialize (30 seconds)..."
 	@sleep 30
-	@$(EXPORT_DOCKER_HOST) && docker compose ps
+	@$(EXPORT_DOCKER_HOST) && docker compose -f docker/docker-compose.yml ps
 
 # Stop PostgreSQL containers
 .PHONY: stop
 stop:
 	@echo "Stopping PostgreSQL containers..."
-	@$(EXPORT_DOCKER_HOST) && docker compose stop
+	@$(EXPORT_DOCKER_HOST) && docker compose -f docker/docker-compose.yml stop
 
 # Restart PostgreSQL containers
 .PHONY: restart
@@ -74,40 +74,40 @@ restart: stop start
 .PHONY: clean
 clean:
 	@echo "Cleaning up containers, volumes, and networks..."
-	@$(EXPORT_DOCKER_HOST) && docker compose down -v
+	@$(EXPORT_DOCKER_HOST) && docker compose -f docker/docker-compose.yml down -v
 
 # Show logs from both containers
 .PHONY: logs
 logs:
 	@echo "Showing logs from PostgreSQL containers..."
-	@$(EXPORT_DOCKER_HOST) && docker compose logs
+	@$(EXPORT_DOCKER_HOST) && docker compose -f docker/docker-compose.yml logs
 
 # Show container status
 .PHONY: status
 status:
 	@echo "Container status:"
-	@$(EXPORT_DOCKER_HOST) && docker compose ps
+	@$(EXPORT_DOCKER_HOST) && docker compose -f docker/docker-compose.yml ps
 
 # Set up replication (publication and subscription)
 .PHONY: setup
 setup:
 	@echo "Setting up replication..."
 	@echo "Creating publication on source database..."
-	@$(EXPORT_DOCKER_HOST) && docker exec -i postgres14_source psql -U postgres -d sourcedb < setup-replication.sql
+	@$(EXPORT_DOCKER_HOST) && docker exec -i postgres14_source psql -U postgres -d sourcedb < docker/setup-replication.sql
 	@echo "Creating subscription on target database..."
-	@$(EXPORT_DOCKER_HOST) && docker exec -i postgres16_target psql -U postgres -d targetdb < setup-subscription.sql
+	@$(EXPORT_DOCKER_HOST) && docker exec -i postgres16_target psql -U postgres -d targetdb < docker/setup-subscription.sql
 
 # Run test operations on source database
 .PHONY: test
 test:
 	@echo "Running test operations on source database..."
-	@$(EXPORT_DOCKER_HOST) && docker exec -i postgres14_source psql -U postgres -d sourcedb < test-replication.sql
+	@$(EXPORT_DOCKER_HOST) && docker exec -i postgres14_source psql -U postgres -d sourcedb < docker/test-replication.sql
 
 # Verify replication on target database
 .PHONY: verify
 verify:
 	@echo "Verifying replication on target database..."
-	@$(EXPORT_DOCKER_HOST) && docker exec -i postgres16_target psql -U postgres -d targetdb < verify-target.sql
+	@$(EXPORT_DOCKER_HOST) && docker exec -i postgres16_target psql -U postgres -d targetdb < docker/verify-target.sql
 
 # Open psql shell on source database
 .PHONY: shell-source

@@ -36,8 +36,8 @@ Logical replication allows for the replication of data objects and their changes
 
 **Role of Main Components/Files:**
 
-*   **`docker-compose.yml`**:
-    *   This file is crucial for orchestrating the local development environment using Docker.
+*   **`docker/docker-compose.yml`**:
+    *   This file, located in the `docker/` directory, is crucial for orchestrating the local development environment using Docker.
     *   It defines and configures two PostgreSQL services: `db_source` (PostgreSQL 14) and `db_target` (PostgreSQL 16).
     *   It manages container networking, allowing `db_target` to connect to `db_source`.
     *   It mounts initial SQL scripts (`init-source.sql`, `init-target.sql`) into the containers, which are executed when the containers start, setting up the initial database schemas and sample data.
@@ -47,13 +47,13 @@ Logical replication allows for the replication of data objects and their changes
     *   Includes targets for starting (`up`), stopping (`down`), setting up replication (`setup-replication`), and testing (`test-replication`).
     *   Also contains commands for deploying (`k8s-apply`), managing (`k8s-delete`, `k8s-logs`), and interacting with the setup on a Kubernetes cluster.
 
-*   **SQL Scripts**:
-    *   `init-source.sql`: Executed on `db_source` at startup. Defines the schema (e.g., `users`, `orders` tables) and inserts initial sample data into the source database.
-    *   `init-target.sql`: Executed on `db_target` at startup. Defines the schema for the target database. It's important that the table structures match those on the source for replication to work correctly.
-    *   `setup-replication.sql`: Contains the SQL command `CREATE PUBLICATION my_publication FOR ALL TABLES;`. This is run on the source database to create the publication.
-    *   `setup-subscription.sql`: Contains the SQL command to create the subscription on the target database, connecting it to the source's publication.
-    *   `test-replication.sql`: Includes DML statements (INSERTs, UPDATEs, DELETEs) that are run against the source database to generate changes after replication is set up.
-    *   `verify-target.sql`: Contains SELECT queries to be run on the target database to check if the changes made by `test-replication.sql` on the source have been successfully replicated.
+*   **SQL Scripts (located in `docker/` directory)**:
+    *   `docker/init-source.sql`: Executed on `db_source` at startup. Defines the schema (e.g., `users`, `orders` tables) and inserts initial sample data into the source database.
+    *   `docker/init-target.sql`: Executed on `db_target` at startup. Defines the schema for the target database. It's important that the table structures match those on the source for replication to work correctly.
+    *   `docker/setup-replication.sql`: Contains the SQL command `CREATE PUBLICATION my_publication FOR ALL TABLES;`. This is run on the source database to create the publication.
+    *   `docker/setup-subscription.sql`: Contains the SQL command to create the subscription on the target database, connecting it to the source's publication.
+    *   `docker/test-replication.sql`: Includes DML statements (INSERTs, UPDATEs, DELETEs) that are run against the source database to generate changes after replication is set up.
+    *   `docker/verify-target.sql`: Contains SELECT queries to be run on the target database to check if the changes made by `test-replication.sql` on the source have been successfully replicated.
 
 *   **`k8s/` Directory**:
     *   This directory houses Kubernetes manifest files (YAML) required to deploy the entire logical replication setup in a Kubernetes cluster. These resources are managed via Kustomize.
@@ -74,31 +74,31 @@ The primary goal of this POC is to demonstrate a practical approach to achieving
 
 1. **Start the containers:**
    ```bash
-   docker-compose up -d
+   docker-compose -f docker/docker-compose.yml up -d
    ```
 
 2. **Wait for both databases to be ready (about 30 seconds):**
    ```bash
-   docker-compose logs -f
+   docker-compose -f docker/docker-compose.yml logs -f
    ```
 
 3. **Set up replication on source database:**
    ```bash
-   docker exec -i postgres14_source psql -U postgres -d sourcedb < setup-replication.sql
+   docker exec -i postgres14_source psql -U postgres -d sourcedb < docker/setup-replication.sql
    ```
 
 4. **Set up subscription on target database:**
    ```bash
-   docker exec -i postgres16_target psql -U postgres -d targetdb < setup-subscription.sql
+   docker exec -i postgres16_target psql -U postgres -d targetdb < docker/setup-subscription.sql
    ```
 
 5. **Test replication:**
    ```bash
    # Run test operations on source
-   docker exec -i postgres14_source psql -U postgres -d sourcedb < test-replication.sql
+   docker exec -i postgres14_source psql -U postgres -d sourcedb < docker/test-replication.sql
    
    # Verify data on target
-   docker exec -i postgres16_target psql -U postgres -d targetdb < verify-target.sql
+   docker exec -i postgres16_target psql -U postgres -d targetdb < docker/verify-target.sql
    ```
 
 ## Manual Testing
@@ -163,8 +163,8 @@ SELECT * FROM pg_replication_origin_status;
 
 1. **Check container logs:**
    ```bash
-   docker-compose logs db_source
-   docker-compose logs db_target
+   docker-compose -f docker/docker-compose.yml logs db_source
+   docker-compose -f docker/docker-compose.yml logs db_target
    ```
 
 2. **Verify network connectivity:**
@@ -184,7 +184,7 @@ SELECT * FROM pg_replication_origin_status;
 ## Cleanup
 
 ```bash
-docker-compose down -v
+docker-compose -f docker/docker-compose.yml down -v
 ```
 
 This will stop and remove containers and volumes.
@@ -198,3 +198,40 @@ This will stop and remove containers and volumes.
 5. **Cleanup**: Remove source database after verification
 
 This setup simulates a zero-downtime migration where the application can be switched from the source to target database with minimal downtime.
+
+## Kubernetes Deployment
+
+The `k8s/` directory contains all necessary manifests and Kustomization files to deploy this logical replication setup on a Kubernetes cluster.
+
+### Key Kubernetes Files:
+- **`k8s/kustomization.yaml`**: Defines the Kustomize build.
+- **`k8s/postgres-configmap.yaml`**: Contains SQL scripts for initialization and replication setup.
+- **`k8s/postgres-source.yaml`**: StatefulSet for PostgreSQL 14 (source).
+- **`k8s/postgres-target.yaml`**: StatefulSet for PostgreSQL 16 (target).
+- **`k8s/postgres-secret.yaml`**: Manages database credentials.
+- **`k8s/setup-replication-job.yaml`**: Kubernetes Job to set up publication and subscription.
+- **`k8s/test-replication.yaml`**: Kubernetes Job to test data replication.
+
+### Kubernetes Quick Start:
+1. **Generate and apply manifests:**
+   ```bash
+   make apply-k8s
+   ```
+2. **Set up replication:**
+   ```bash
+   make k8s-setup
+   ```
+3. **Test replication:**
+   ```bash
+   make k8s-test
+   ```
+4. **Monitor replication:**
+   ```bash
+   make k8s-monitor
+   ```
+5. **Clean up Kubernetes resources:**
+   ```bash
+   make delete-k8s
+   ```
+
+Refer to the `Makefile` for more Kubernetes targets and details.
